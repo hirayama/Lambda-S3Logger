@@ -1,2 +1,24 @@
-# Lambda-S3Logger.js
-Logging S3 log files to Redshift on Lambda. (AWS)
+# Lambda-S3Logger
+Send S3 log files to Redshift by Lambda. (AWS)
+
+# Usage
+The Lambda script is called when a object is put on the S3 bucket.  
+The script catch the object path (=Bucket name and Key) and send the object to Redshift by "Copy" command.
+
+# Steps
+
+ * Enable logging on the target bucket on S3, using aws console.
+ * Create Redshift table.
+ * Create Lambda function.
+   * Set the trigger "PUT method on the log bucket"
+   * Set the permission "RedshiftFullAccess"
+   * Timeout in 60 or 120 sec
+ * Edit *src/index.js* in your own context.
+ * Run the *package.sh*, and upload the zip file.
+ * Enable the trigger.
+
+# Concerning
+
+The IP address of the processing Lambda instance is not static.  
+If you did not allow "0.0.0.0/0" on your Redshift clusters, the Lambda be timeout.
+This script get IP address of self and set the permission every time.
