@@ -27,6 +27,7 @@ var securityGroup = 'default';
 // global
 var lambda_ip = '';
 var redshift = null;
+var ip_already_exists = false;
 
 // main
 exports.handler = function(event, context) {
@@ -70,16 +71,15 @@ exports.handler = function(event, context) {
 
 			redshift = new aws.Redshift({region: redshift_region});
 			redshift.authorizeClusterSecurityGroupIngress(cidr_params, function (err, data) {
-				var already_exists = false;
 				if (err) {
 					console.log('could not set security group, CIDR:', lambda_ip_cidr);
 					if (err.stack.indexOf('AuthorizationAlreadyExists') === 0) {
-						already_exists = true;
+						ip_already_exists = true;
 					} else {
 						context.done(err, err.stack);
 					} 
 				}
-				if (already_exists || !err) {
+				if (ip_already_exists || !err) {
 					// connect to redshift
 					var conn = new pg.Client(conString);
 					conn.connect();
@@ -102,6 +102,10 @@ exports.handler = function(event, context) {
 
 		// Revoke IP
 		function (callback) {
+			if (ip_already_exists) {
+				callback(null, true);
+				return;
+			}
 			if (!redshift) {
 				redshift = new aws.Redshift({region: redshift_region});
 			}
