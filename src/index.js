@@ -63,18 +63,23 @@ exports.handler = function(event, context) {
 		// *DONOT divide thease processes.
 		function (callback) {
 			var lambda_ip_cidr = lambda_ip + '/32';
-			var params = {
+			var cidr_params = {
 				ClusterSecurityGroupName: securityGroup,
 				CIDRIP: lambda_ip_cidr
 			};
 
 			redshift = new aws.Redshift({region: redshift_region});
-			redshift.authorizeClusterSecurityGroupIngress(params, function (err, data) {
+			redshift.authorizeClusterSecurityGroupIngress(cidr_params, function (err, data) {
+				var already_exists = false;
 				if (err) {
 					console.log('could not set security group, CIDR:', lambda_ip_cidr);
-				} else {
-					console.log('success to set the security group, CIDR:', lambda_ip_cidr);
-
+					if (err.stack.indexOf('AuthorizationAlreadyExists') === 0) {
+						already_exists = true;
+					} else {
+						context.done(err, err.stack);
+					} 
+				}
+				if (already_exists || !err) {
 					// connect to redshift
 					var conn = new pg.Client(conString);
 					conn.connect();
