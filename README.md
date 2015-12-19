@@ -13,12 +13,12 @@ The script catch the object path (=Bucket name and Key) and send the object to R
    * Set the trigger "PUT method on the log bucket"
    * Set the permission "RedshiftFullAccess"
    * Timeout in 60 or 120 sec
+ * You need a EC2 instance, attached Elastic IP for tunneling.
  * Edit *src/index.js* in your own context.
  * Run the *package.sh*, and upload the zip file.
  * Enable the trigger.
 
-# Concerning
+# Note
 
 The IP address of the processing Lambda instance is not static.  
-If you did not allow "0.0.0.0/0" on your Redshift clusters, the Lambda be timeout.
-This script get IP address of self and set the permission every time.
+You need to set 0.0.0.0/0 permission to Redshift cluster or use the NAT instance for IP forwarding.
