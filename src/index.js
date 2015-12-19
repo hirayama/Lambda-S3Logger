@@ -2,39 +2,63 @@
  * Lambda-S3Logger
  * 
  * Trigger: PUT method on the S3 log bucket
- * Execution: Copy the S3 log file to Redshift
+ * Execution: Copy the S3 log file to Redshift via Tunnel-SSH
  * 
  * @see		npm_installer.sh, package.sh
- * @since	2015-12-16
+ * @since	2015-12-19
  * @author	Tomohiro Hirayama
  */
+console.log('Loading function');
 
-// requires
+// import
 var pg = require('pg');
 var async = require('async');
-var aws = require('aws-sdk');
-var exec = require('child_process').exec;
+var fs = require('fs');
+var tunnel = require('tunnel-ssh');
+var freeport = require('freeport');
 
-// variables
-// for Redshift
-var conString = 'pg://{username}:{password}@{hostname}:{port}/{dbName}';
-var table_name = '{RedshiftTableName}';
-var credentials = 'aws_access_key_id={aws_access_key};aws_secret_access_key={aws_secret_access_key}';
-var options = "delimiter ' ' REMOVEQUOTES COMPUPDATE OFF MAXERROR 1000 TIMEFORMAT AS '[DD/MON/YYYY:HH24:MI:SS' REGION '{S3Region}'";
-var redshift_region = 'us-east-1';
-var securityGroup = 'default';
+// tunnel-ssh config
+var localHost = 'localhost';
+var localPort = null;
+var RedshiftPort = '5439';
+var RedshiftHost = '{RedshiftHost}';
+var ElasticIP = '{SSHHOST}';
+var privateKeyPath = '{RSAPath}';
+var tunnel_config = {
+	username: '{sshUserName}',
+	port: 22, 
+	host: ElasticIP,
+	privateKey: fs.readFileSync(privateKeyPath),
+	
+	dstHost: RedshiftHost,
+	dstPort: RedshiftPort,
 
-// global
-var lambda_ip = '';
-var redshift = null;
-var ip_already_exists = false;
+	srcHost: localHost,
+	srcPort: localPort,
+	localHost: localHost,
+	localPort: localPort,
+	keepAlive: false
+};
+
+// Redshift params
+var RedshiftUsername = '{RedshiftUsername}';
+var RedshiftPass     = '{RedshiftPass}';
+var RedshiftDB       = '{RedshiftDB}';
+var RedshiftTable    = '{RedshiftTable}';
+var conString        = 'pg://'+RedshiftUsername+':'+ReadshiftPass+'@'+RedshiftHost+':'+RedshiftPort+'/'+RedshiftDB;
+var forwordCon       = 'pg://'+RedshiftUsername+':'+ReadshiftPass+'@'+localHost+':'+localPort+'/'+RedshiftDB;
+
+// Copy command params
+var awsAccessKey       = '{awsAccessKey}';
+var awsSecretAccessKey = '{awsSecretAccessKey}';
+var LambdaRegion       = 'ap-northeast-1';
+var credentials        = 'aws_access_key_id='+awsAccessKey+';aws_secret_access_key='+awsSecretAccessKey;
+var options            = "delimiter ' ' REMOVEQUOTES COMPUPDATE OFF MAXERROR 1000 TIMEFORMAT AS '[DD/MON/YYYY:HH24:MI:SS' REGION '"+LambdaRegion+"'";
 
 // main
 exports.handler = function(event, context) {
 
-	console.log('Catch S3 PUT Event');
-
-	// Get S3 Object Meta Data
+	// Get S3 Object
 	var bucket = event.Records[0].s3.bucket.name;
 	var key = decodeURIComponent(event.Records[0].s3.object.key.replace(/\+/g, ' '));
 	var params = {
@@ -42,94 +66,40 @@ exports.handler = function(event, context) {
 		Key: key
 	};
 
-	// async processes
-	async.series([
+	freeport(function(err, port) {
+		if (err) {
+			console.log(err);
+		}
+		// tunnel-ssh config
+		localPort = port;
+		tunnel_config.srcPort = port;
+		tunnel_config.localPort = port;
+		forwordCon = 'pg://'+RedshiftUsername+':'+ReadshiftPass+'@'+localHost+':'+localPort+'/'+RedshiftDB;
 
-		// Get Lambda IP
-		function (callback) {
-			var cmd = "curl http://checkip.amazonaws.com/";
-			exec(cmd, function(error, stdout, stderr) {
-				if (!error) {
-					lambda_ip = stdout.replace(/\r?\n/g,"");
-					console.log('Lambda IP: ' + stdout);
-				} else {
-					console.log("error code: ", error);
-					context.done(err,'lambda');
-				}
-				callback(null, "Get Lambda IP: [" + lambda_ip + "]");
-			});
-		},
-
-		// Set the permission to Redshift AND THEN connect to Redshift
-		// *DONOT divide thease processes.
-		function (callback) {
-			var lambda_ip_cidr = lambda_ip + '/32';
-			var cidr_params = {
-				ClusterSecurityGroupName: securityGroup,
-				CIDRIP: lambda_ip_cidr
-			};
-
-			redshift = new aws.Redshift({region: redshift_region});
-			redshift.authorizeClusterSecurityGroupIngress(cidr_params, function (err, data) {
-				if (err) {
-					console.log('could not set security group, CIDR:', lambda_ip_cidr);
-					if (err.stack.indexOf('AuthorizationAlreadyExists') === 0) {
-						ip_already_exists = true;
-					} else {
-						context.done(err, err.stack);
-					} 
-				}
-				if (ip_already_exists || !err) {
-					// connect to redshift
-					var conn = new pg.Client(conString);
-					conn.connect();
+		// Start PortForwarding
+		tunnel(tunnel_config, function(e, sshTunnel) {
+			if (e) {
+				console.log('TunnelError', e);
+			}
+			// async processes
+			async.series([
+				// Connect to Redshift
+				function (callback) {
+					var db = new pg.Client(forwordCon);
+					db.connect();
 					var copyCmd = "COPY "+table_name+" FROM 's3://"+params.Bucket+"/"+params.Key+"' CREDENTIALS '"+credentials+"' "+options+";";
-					conn.query("BEGIN", function(err, result) {
-						conn.query(copyCmd, function(err, result) {
-							conn.query("COMMIT;", db.end.bind(db));
-							console.log('command is executed.');
-							if (err) {
-								return console.error('error running query', err);
-							}
-							console.log("redhshift load: no errors, seem to be successful!");
-							conn.end();
-							callback(null, 'Copy was done.');
-						});
+					db.query(copyCmd, function(err, result) {
+						callback(null, true);
 					});
 				}
-			});
-		},
-
-		// Revoke IP
-		function (callback) {
-			if (ip_already_exists) {
-				callback(null, true);
-				return;
-			}
-			if (!redshift) {
-				redshift = new aws.Redshift({region: redshift_region});
-			}
-			var lambda_ip_cidr = lambda_ip + '/32';
-			var params = {
-				ClusterSecurityGroupName: 'default',
-				CIDRIP: lambda_ip_cidr
-			};
-			redshift.revokeClusterSecurityGroupIngress(params, function (err, data) {
+			],
+			function(err, results) {
 				if (err) {
-					console.log('could not unset security group, CIDR:', lambda_ip_cidr);
-				} else {
-					console.log('success to unset the security group, CIDR:', lambda_ip_cidr);
+					console.log('error', err);
 				}
-				callback(null, 'Success revoke.');
+				console.log(results);
+				context.succeed('Success!');
 			});
-		}
-	
-	], function(err, results) {
-		if (err) {
-			console.log('error', err);
-		}
-		console.log(results);
-		context.succeed(result);
+		});
 	});
-
 };
